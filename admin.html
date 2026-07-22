@@ -93,6 +93,22 @@
     <label>Brand name (typed)</label><input id="wordmark" placeholder="ACME TRAVEL" />
     <label>Tagline</label><input id="tagline" placeholder="Journeys worth telling" />
 
+    <label>Logo (optional)</label>
+    <input id="logofile" type="file" accept="image/*" onchange="pickLogo(event)" />
+    <img id="logoprev" class="prev" style="display:none;border-radius:8px;background:#0F1720;object-fit:contain" />
+    <label>Logo layout</label>
+    <select id="logoMode" onchange="modeChanged()">
+      <option value="none">No logo — typed name only</option>
+      <option value="lock">Logo + typed name (side by side)</option>
+      <option value="full">Logo only (wide, logo has the name in it)</option>
+    </select>
+    <label>Logo size (px)</label><input id="logoW" value="60" />
+    <p class="hint">~60 for "logo + name", ~230 for "logo only".</p>
+    <label style="display:flex;align-items:center;gap:9px;text-transform:none;font-size:13px;opacity:.85">
+      <input type="checkbox" id="logoBlend" style="width:auto;margin:0" />
+      Logo is dark artwork (brighten it on the dark band)
+    </label>
+
     <div class="two">
       <div><label>Phone (dial)</label><input id="phone" placeholder="+919876543210" /></div>
       <div><label>Phone (shown)</label><input id="phoneShow" placeholder="+91 98765 43210" /></div>
@@ -189,11 +205,29 @@ function openPanel(){
 
 /* ── helpers ── */
 function setTheme(b,g){ $('brand').value=b; $('gold').value=g; }
-let photoData=null;
+let photoData=null, logoData=null;
 function pickPhoto(e){
   const f=e.target.files[0]; if(!f) return;
   photoData=f; const u=URL.createObjectURL(f);
   $('prev').src=u; $('prev').style.display='block';
+}
+function pickLogo(e){
+  const f=e.target.files[0]; if(!f) return;
+  logoData=f; $('logoprev').src=URL.createObjectURL(f); $('logoprev').style.display='block';
+  if($('logoMode').value==='none'){ $('logoMode').value='lock'; modeChanged(); }
+}
+/* keep the header a sensible size for each layout */
+function modeChanged(){
+  const m=$('logoMode').value;
+  if(m==='full') $('logoW').value='230';
+  else if(m==='lock') $('logoW').value='60';
+}
+/* upload a file to Supabase Storage, return its public URL */
+async function upload(file, prefix){
+  const path = prefix+'-'+Date.now()+'.'+((file.name.split('.').pop()||'jpg').toLowerCase());
+  const r = await authFetch(`${SB_URL}/storage/v1/object/photos/${path}`, { method:'POST', body:file });
+  if(!r.ok) throw new Error(await r.text());
+  return `${SB_URL}/storage/v1/object/public/photos/${path}`;
 }
 $('slug').addEventListener('input',e=>{
   e.target.value=e.target.value.toLowerCase().replace(/[^a-z0-9-]/g,'');
@@ -203,8 +237,11 @@ function clearForm(){
   ['slug','name','role','wordmark','tagline','phone','phoneShow','email','website','websiteShow',
    'location','maps','instagram','facebook','linkedin','whatsapp','services','org'].forEach(i=>$(i).value='');
   $('photoPos').value='50% 30%'; $('servicesTitle').value='What We Do';
-  setTheme('#0D1B2A','#C9A84C'); photoData=null;
-  $('prev').style.display='none'; $('live').style.display='none'; $('msg').style.display='none';
+  setTheme('#0D1B2A','#C9A84C'); photoData=null; logoData=null;
+  $('logoMode').value='none'; $('logoW').value='60'; $('logoBlend').checked=false;
+  $('prev').style.display='none'; $('prev').dataset.url='';
+  $('logoprev').style.display='none'; $('logoprev').dataset.url='';
+  $('live').style.display='none'; $('msg').style.display='none';
 }
 
 /* ── save ── */
@@ -214,18 +251,20 @@ async function save(){
   show($('msg'),'Saving…',true);
 
   let photoUrl = $('prev').dataset.url || '';
-  if(photoData){
-    const path = slug+'-'+Date.now()+'.'+(photoData.name.split('.').pop()||'jpg');
-    const up = await authFetch(`${SB_URL}/storage/v1/object/photos/${path}`,
-      { method:'POST', body: photoData });
-    if(!up.ok){ const t=await up.text(); return show($('msg'),'Photo upload failed: '+t,false); }
-    photoUrl = `${SB_URL}/storage/v1/object/public/photos/${path}`;
-  }
+  let logoUrl  = $('logoprev').dataset.url || '';
+  try{
+    if(photoData) photoUrl = await upload(photoData, slug+'-photo');
+    if(logoData)  logoUrl  = await upload(logoData,  slug+'-logo');
+  }catch(err){ return show($('msg'),'Upload failed: '+err.message,false); }
+
+  const mode = $('logoMode').value;
+  if(mode==='none') logoUrl='';
 
   const data = {
     brand:$('brand').value.trim()||'#0D1B2A', gold:$('gold').value.trim()||'#C9A84C',
-    logo:'', logoBlend:false, logoW:60,
-    wordmark:$('wordmark').value.trim(), tagline:$('tagline').value.trim(),
+    logo:logoUrl, logoBlend:$('logoBlend').checked, logoW:parseInt($('logoW').value,10)||60,
+    wordmark: mode==='full' ? '' : $('wordmark').value.trim(),
+    tagline:$('tagline').value.trim(),
     photo:photoUrl, photoPos:$('photoPos').value.trim()||'50% 30%',
     name:$('name').value.trim(), role:$('role').value.trim(),
     phone:$('phone').value.trim(), phoneShow:$('phoneShow').value.trim()||$('phone').value.trim(),
@@ -271,9 +310,14 @@ async function edit(slug){
    'website','websiteShow','location','maps','instagram','facebook','linkedin','whatsapp',
    'servicesTitle','org'].forEach(k=>{ if($(k)) $(k).value = d[k]||''; });
   $('services').value=(d.services||[]).join('\n');
-  photoData=null;
+  photoData=null; logoData=null;
   if(d.photo){ $('prev').src=d.photo; $('prev').dataset.url=d.photo; $('prev').style.display='block'; }
   else { $('prev').style.display='none'; $('prev').dataset.url=''; }
+  if(d.logo){ $('logoprev').src=d.logo; $('logoprev').dataset.url=d.logo; $('logoprev').style.display='block';
+              $('logoMode').value = d.wordmark ? 'lock' : 'full'; }
+  else { $('logoprev').style.display='none'; $('logoprev').dataset.url=''; $('logoMode').value='none'; }
+  $('logoW').value = d.logoW || 60;
+  $('logoBlend').checked = !!d.logoBlend;
   window.scrollTo({top:0,behavior:'smooth'});
   show($('msg'),'Editing '+slug,true);
 }
