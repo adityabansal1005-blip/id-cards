@@ -1,0 +1,6 @@
+{
+  "cleanUrls": true,
+  "rewrites": [
+    { "source": "/((?!img/|files/).*)", "destination": "/index.html" }
+  ]
+}
