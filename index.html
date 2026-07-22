@@ -211,9 +211,28 @@ const SOC = {
 const esc = s => String(s||'').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
 /* which card? /slug  or  ?c=slug  (falls back to first card) */
+const SB_URL = 'https://gtygqkqiqcfimpdfiaxk.supabase.co';
+const SB_KEY = 'sb_publishable_e_QN8ug7AISzSDg5qeJe-A_4hBg_hIR';
+
 const slug = decodeURIComponent(location.pathname.replace(/^\/|\/$/g,'')) ||
              new URLSearchParams(location.search).get('c') || Object.keys(CARDS)[0];
-const d = CARDS[slug] || CARDS[slug.toLowerCase()];
+
+/* cards added from the phone live in Supabase; the ones in CARDS above
+   are built-in fallbacks that work even if Supabase is unreachable */
+async function fetchRemote(s){
+  try{
+    const r = await fetch(`${SB_URL}/rest/v1/cards?slug=eq.${encodeURIComponent(s)}&select=data`,
+      { headers:{ apikey:SB_KEY, Authorization:'Bearer '+SB_KEY } });
+    if(!r.ok) return null;
+    const j = await r.json();
+    return (j && j[0] && j[0].data) || null;
+  }catch(e){ return null; }
+}
+
+boot();
+async function boot(){
+let d = CARDS[slug] || CARDS[slug.toLowerCase()];
+if (!d) d = await fetchRemote(slug) || await fetchRemote(slug.toLowerCase());
 
 if (!d) {
   document.getElementById('app').innerHTML =
@@ -299,6 +318,7 @@ if (!d) {
   document.querySelectorAll('[data-c]').forEach(el=>el.addEventListener('click',()=>track('card_contact_tap',{label:el.dataset.c})));
   document.querySelectorAll('[data-s]').forEach(el=>el.addEventListener('click',()=>track('card_social_tap',{platform:el.dataset.s})));
   const p=document.getElementById('pdf'); if(p) p.addEventListener('click',()=>track('card_view_guide'));
+}
 }
 </script>
 </body>
