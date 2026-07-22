@@ -137,7 +137,8 @@
 <script>
 const SB_URL='https://gtygqkqiqcfimpdfiaxk.supabase.co';
 const SB_KEY='sb_publishable_e_QN8ug7AISzSDg5qeJe-A_4hBg_hIR';
-let TOKEN = localStorage.getItem('sb_token') || '';
+let TOKEN   = localStorage.getItem('sb_token') || '';
+let REFRESH = localStorage.getItem('sb_refresh') || '';
 
 const $ = id => document.getElementById(id);
 const show = (el,txt,ok) => { el.textContent=txt; el.className='msg '+(ok?'ok':'err'); };
@@ -151,11 +152,35 @@ async function signIn(){
     { method:'POST', headers:{'Content-Type':'application/json', apikey:SB_KEY},
       body: JSON.stringify({ email:$('em').value.trim(), password:$('pw').value }) });
   const j = await r.json();
-  if(j.access_token){ TOKEN=j.access_token; localStorage.setItem('sb_token',TOKEN);
-    localStorage.setItem('sb_email',$('em').value.trim()); openPanel(); }
+  if(j.access_token){ saveSession(j); localStorage.setItem('sb_email',$('em').value.trim()); openPanel(); }
   else show($('lmsg'), j.error_description || j.msg || 'Login failed', false);
 }
-function signOut(){ localStorage.removeItem('sb_token'); TOKEN=''; location.reload(); }
+function saveSession(j){
+  TOKEN=j.access_token; REFRESH=j.refresh_token||REFRESH;
+  localStorage.setItem('sb_token',TOKEN); localStorage.setItem('sb_refresh',REFRESH);
+}
+/* access tokens expire in ~1h — refresh silently so a long event never logs you out */
+async function refreshSession(){
+  if(!REFRESH) return false;
+  const r = await fetch(`${SB_URL}/auth/v1/token?grant_type=refresh_token`,
+    { method:'POST', headers:{'Content-Type':'application/json', apikey:SB_KEY},
+      body: JSON.stringify({ refresh_token: REFRESH }) });
+  const j = await r.json();
+  if(j.access_token){ saveSession(j); return true; }
+  return false;
+}
+/* any authed call: retry once after refreshing if the token went stale */
+async function authFetch(url, opts={}){
+  opts.headers = { ...(opts.headers||{}), apikey:SB_KEY, Authorization:'Bearer '+TOKEN };
+  let r = await fetch(url, opts);
+  if(r.status===401 && await refreshSession()){
+    opts.headers.Authorization = 'Bearer '+TOKEN;
+    r = await fetch(url, opts);
+  }
+  return r;
+}
+function signOut(){ localStorage.removeItem('sb_token'); localStorage.removeItem('sb_refresh');
+  TOKEN=''; REFRESH=''; location.reload(); }
 function openPanel(){
   $('login').style.display='none'; $('panel').style.display='block';
   $('who').textContent = 'Signed in as ' + (localStorage.getItem('sb_email')||'');
@@ -191,8 +216,8 @@ async function save(){
   let photoUrl = $('prev').dataset.url || '';
   if(photoData){
     const path = slug+'-'+Date.now()+'.'+(photoData.name.split('.').pop()||'jpg');
-    const up = await fetch(`${SB_URL}/storage/v1/object/photos/${path}`,
-      { method:'POST', headers:{ apikey:SB_KEY, Authorization:'Bearer '+TOKEN }, body: photoData });
+    const up = await authFetch(`${SB_URL}/storage/v1/object/photos/${path}`,
+      { method:'POST', body: photoData });
     if(!up.ok){ const t=await up.text(); return show($('msg'),'Photo upload failed: '+t,false); }
     photoUrl = `${SB_URL}/storage/v1/object/public/photos/${path}`;
   }
@@ -214,9 +239,9 @@ async function save(){
     pdf:'', pdfLabel:'View Brochure', org:$('org').value.trim(), ga:''
   };
 
-  const r = await fetch(`${SB_URL}/rest/v1/cards?on_conflict=slug`, {
+  const r = await authFetch(`${SB_URL}/rest/v1/cards?on_conflict=slug`, {
     method:'POST',
-    headers:{ ...H(true), Prefer:'resolution=merge-duplicates,return=representation' },
+    headers:{ 'Content-Type':'application/json', Prefer:'resolution=merge-duplicates,return=representation' },
     body: JSON.stringify({ slug, data, updated_at:new Date().toISOString() })
   });
   if(!r.ok){ const t=await r.text(); return show($('msg'),'Save failed: '+t,false); }
@@ -253,7 +278,9 @@ async function edit(slug){
   show($('msg'),'Editing '+slug,true);
 }
 
-if(TOKEN) openPanel();
+/* remember the email so the login screen is effectively just a passcode */
+$('em').value = localStorage.getItem('sb_email') || '';
+if(TOKEN){ openPanel(); refreshSession(); }
 </script>
 </body>
 </html>
